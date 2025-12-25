@@ -35,6 +35,7 @@ from .models import (
     ImageProviders,
     NoteTypeMap,
     OpenAIModels,
+    OpenAIReasoningEffort,
     PromptMap,
     TTSModels,
     TTSProviders,
@@ -89,6 +90,7 @@ class Config:
 
     # Deprecated fields:
     legacy_openai_model: OpenAIModels
+    legacy_openai_reasoning_effort: Optional[OpenAIReasoningEffort]
 
     def setup_config(self) -> None:
         try:
