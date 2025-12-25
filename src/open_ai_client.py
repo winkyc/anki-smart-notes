@@ -29,6 +29,7 @@ from .constants import (
     RETRY_BASE_SECONDS,
 )
 from .logger import logger
+from .models import openai_reasoning_efforts_for_model
 
 OPENAI_ENDPOINT = "https://api.openai.com"
 
@@ -47,10 +48,35 @@ class OpenAIClient:
     ) -> str:
         """Gets a chat response from OpenAI's chat API. This method can throw; the caller should handle with care."""
         endpoint = f"{config.openai_endpoint or OPENAI_ENDPOINT}/v1/chat/completions"
+        model = config.legacy_openai_model
+
+        # Check reasoning
+        is_reasoning = model.lower().startswith("o") or model in (
+            "gpt-5",
+            "gpt-5.1",
+            "gpt-5.2",
+        )
 
         logger.debug(
-            f"OpenAI: hitting {endpoint} model: {config.legacy_openai_model} retries {retry_count} for prompt: {prompt}"
+            f"OpenAI: hitting {endpoint} model: {model} retries {retry_count} for prompt: {prompt}"
         )
+
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        if is_reasoning:
+            efforts = openai_reasoning_efforts_for_model(model)
+            current_effort = (config.legacy_openai_reasoning_effort or "medium").lower()
+
+            if current_effort not in efforts:
+                current_effort = "medium" if "medium" in efforts else efforts[0]
+
+            payload["reasoning_effort"] = current_effort
+        else:
+            payload["temperature"] = temperature
+
         try:
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
@@ -59,11 +85,7 @@ class OpenAIClient:
                     headers={
                         "Authorization": f"Bearer {config.openai_api_key}",
                     },
-                    json={
-                        "model": config.legacy_openai_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": temperature,
-                    },
+                    json=payload,
                 ) as response,
             ):
                 if response.status == 429:

@@ -49,7 +49,12 @@ from ..config import config
 from ..constants import GLOBAL_DECK_ID, UNPAID_PROVIDER_ERROR
 from ..decks import deck_id_to_name_map, deck_name_to_id_map
 from ..logger import logger
-from ..models import PromptMap, SmartFieldType, legacy_openai_chat_models
+from ..models import (
+    PromptMap,
+    SmartFieldType,
+    legacy_openai_chat_models,
+    openai_reasoning_efforts_for_model,
+)
 from ..note_proccessor import NoteProcessor
 from ..prompts import get_all_prompts, get_extras, get_prompts_for_note, remove_prompt
 from ..utils import get_fields, get_version
@@ -82,6 +87,8 @@ class State(TypedDict):
     openai_api_key: Optional[str]
     legacy_openai_model: str
     legacy_openai_models: list[str]
+    legacy_openai_reasoning_effort: str
+    legacy_openai_reasoning_efforts: list[str]
 
 
 class AddonOptionsDialog(QDialog):
@@ -108,6 +115,14 @@ class AddonOptionsDialog(QDialog):
 
         self.openai_legacy_combo_box = ReactiveComboBox(
             self.state, "legacy_openai_models", "legacy_openai_model"
+        )
+        self.openai_legacy_combo_box.on_change.connect(
+            self._sync_openai_reasoning_efforts
+        )
+        self.openai_reasoning_effort_combo_box = ReactiveComboBox(
+            self.state,
+            "legacy_openai_reasoning_efforts",
+            "legacy_openai_reasoning_effort",
         )
 
         # Buttons
@@ -350,6 +365,7 @@ class AddonOptionsDialog(QDialog):
         models_form = default_form_layout()
         models_form.addRow(self.render_openai_api_key_box())
         models_form.addRow("OpenAI Model:", self.openai_legacy_combo_box)
+        models_form.addRow("Reasoning Effort:", self.openai_reasoning_effort_combo_box)
 
         learn_more_about_models = QLabel(
             'Newer models (GPT-5, etc) will perform better with lower rate limits and higher cost. <a href="https://platform.openai.com/docs/models/">Learn more.</a>'
@@ -682,7 +698,27 @@ class AddonOptionsDialog(QDialog):
             # Legacy OpenAI
             "legacy_openai_model": config.legacy_openai_model,
             "legacy_openai_models": legacy_openai_chat_models,
+            "legacy_openai_reasoning_effort": config.legacy_openai_reasoning_effort
+            or "medium",
+            "legacy_openai_reasoning_efforts": openai_reasoning_efforts_for_model(
+                config.legacy_openai_model or "gpt-4o-mini"
+            ),
         }
+
+    def _sync_openai_reasoning_efforts(self, model: str) -> None:
+        efforts = openai_reasoning_efforts_for_model(model)
+        current_effort = self.state.s["legacy_openai_reasoning_effort"]
+        if current_effort not in efforts:
+            current_effort = (
+                "medium" if "medium" in efforts else efforts[0]
+            )  # Default to medium if available
+
+        self.state.update(
+            {
+                "legacy_openai_reasoning_efforts": efforts,
+                "legacy_openai_reasoning_effort": current_effort,
+            }
+        )
 
     def on_restore_defaults(self) -> None:
         config.restore_defaults()
