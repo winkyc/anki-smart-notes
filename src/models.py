@@ -27,6 +27,8 @@ ChatProviders = Literal["openai", "anthropic", "deepseek"]
 # Chat Models
 
 OpenAIModels = Literal[
+    "gpt-5.2",
+    "gpt-5.2-chat-latest",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5-nano",
@@ -44,8 +46,9 @@ openai_chat_models: list[ChatModels] = [
     "gpt-5-nano",
     "gpt-4o-mini",
     "gpt-5-mini",
-    "gpt-5-chat-latest",
+    "gpt-5.2-chat-latest",
     "gpt-5",
+    "gpt-5.2",
 ]
 
 anthropic_chat_models: list[ChatModels] = [
@@ -64,7 +67,8 @@ provider_model_map: dict[ChatProviders, list[ChatModels]] = {
 
 
 legacy_openai_chat_models: list[str] = [
-    "gpt-5-chat-latest",
+    "gpt-5.2-chat-latest",
+    "gpt-5.2",
     "gpt-5",
     "gpt-5-nano",
     "gpt-5-mini",
@@ -80,6 +84,27 @@ legacy_openai_chat_models: list[str] = [
     "o3",
     "o4-mini",
 ]
+
+# Reasoning Efforts
+OpenAIReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+OPENAI_DEFAULT_REASONING_EFFORTS: tuple[OpenAIReasoningEffort, ...] = (
+    "low",
+    "medium",
+    "high",
+)
+OPENAI_REASONING_EFFORTS_BY_MODEL: dict[str, tuple[OpenAIReasoningEffort, ...]] = {
+    "gpt-5": ("minimal", "low", "medium", "high"),
+    "gpt-5.1": ("none", "minimal", "low", "medium", "high"),
+    "gpt-5.2": ("none", "minimal", "low", "medium", "high", "xhigh"),
+}
+
+
+def openai_reasoning_efforts_for_model(model: str) -> list[OpenAIReasoningEffort]:
+    key = model.lower()
+    return list(
+        OPENAI_REASONING_EFFORTS_BY_MODEL.get(key, OPENAI_DEFAULT_REASONING_EFFORTS)
+    )
+
 
 # TTS Models
 
