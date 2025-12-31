@@ -95,7 +95,19 @@ class Sentry:
                         self.capture_exception(exc_value)
                 except Exception as e:
                     logger.error(f"Error in excepthook: {e}")
-                old_hook(exc_type, exc_value, exc_traceback)
+
+                try:
+                    old_hook(exc_type, exc_value, exc_traceback)
+                except TypeError:
+                    # Some versions of Anki or other plugins might have replaced excepthook with
+                    # a function that has a different signature (e.g. 1 arg for args).
+                    # We try to call it with just the exception as a fallback.
+                    try:
+                        # Fallback for handlers that might expect a single argument
+                        if hasattr(old_hook, "__call__"):
+                            old_hook(exc_value)  # type: ignore
+                    except Exception as e2:
+                        logger.error(f"Error calling old excepthook: {e2}")
 
             sys.excepthook = new_hook
         except Exception as e:

@@ -27,6 +27,7 @@ from anki.cards import Card, CardId
 from anki.decks import DeckId
 from anki.notes import Note, NoteId
 from aqt import mw
+from aqt.qt import QDialog, QLabel, QProgressBar, QPushButton, Qt, QVBoxLayout
 
 from .app_state import (
     app_state,
@@ -49,6 +50,39 @@ from .utils import run_on_main
 # OPEN_AI rate limits
 NEW_OPEN_AI_MODEL_REQ_PER_MIN = 500
 OLD_OPEN_AI_MODEL_REQ_PER_MIN = 3500
+
+
+class ProgressDialog(QDialog):
+    def __init__(self, label: str, max_val: int, on_cancel: Callable[[], None]):
+        super().__init__(mw)
+        self.setWindowTitle("Smart Notes")
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setMinimumWidth(400)
+
+        layout = QVBoxLayout()
+
+        self.label = QLabel(label)
+        layout.addWidget(self.label)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, max_val)
+        self.bar.setValue(0)
+        layout.addWidget(self.bar)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(on_cancel)
+        layout.addWidget(self.cancel_button)
+
+        self.setLayout(layout)
+
+    def set_value(self, val: int) -> None:
+        self.bar.setValue(val)
+
+    def set_label(self, text: str) -> None:
+        self.label.setText(text)
+
+    def disable_cancel(self) -> None:
+        self.cancel_button.setEnabled(False)
 
 
 class NoteProcessor:
@@ -85,19 +119,6 @@ class NoteProcessor:
         if not is_capacity_remaining_or_legacy(show_box=False):
             return
 
-        def wrapped_on_success(res: tuple[list[Note], list[Note], list[Note]]) -> None:
-            updated, failed, skipped = res
-            if not mw or not mw.col:
-                return
-            mw.col.update_notes(updated)
-            self._reqlinquish_req_in_process()
-            if on_success:
-                on_success(updated, failed, skipped)
-
-        def on_failure(e: Exception) -> None:
-            self._reqlinquish_req_in_process()
-            show_message_box(f"Error: {e}")
-
         # TODO: this logic should be re-addressed when I revisit batch limits (ANK-28)
         if is_capacity_remaining():
             limit = STANDARD_BATCH_LIMIT
@@ -111,12 +132,38 @@ class NoteProcessor:
         logger.debug(f"Rate limit: {limit}")
 
         # Only show fancy progress meter for large batches
-        mw.progress.start(
-            label=f"✨Generating... (0/{len(note_ids)})",
-            min=0,
-            max=0,
-            immediate=True,
+        cancellation_state = {"cancelled": False}
+
+        def on_cancel() -> None:
+            cancellation_state["cancelled"] = True
+            logger.info("Cancellation requested")
+            if progress:
+                progress.set_label(
+                    "Cancelling... please wait for current batch to finish."
+                )
+                progress.disable_cancel()
+
+        progress = ProgressDialog(
+            "✨Generating... (0/{})".format(len(note_ids)), len(note_ids), on_cancel
         )
+        progress.show()
+
+        def wrapped_on_success(res: tuple[list[Note], list[Note], list[Note]]) -> None:
+            updated, failed, skipped = res
+            if progress:
+                progress.close()
+            if not mw or not mw.col:
+                return
+            mw.col.update_notes(updated)
+            self._reqlinquish_req_in_process()
+            if on_success:
+                on_success(updated, failed, skipped)
+
+        def on_failure(e: Exception) -> None:
+            if progress:
+                progress.close()
+            self._reqlinquish_req_in_process()
+            show_message_box(f"Error: {e}")
 
         def on_update(
             updated: list[Note], processed_count: int, finished: bool
@@ -124,19 +171,23 @@ class NoteProcessor:
             if not mw or not mw.col:
                 return
 
-            mw.col.update_notes(updated)
+            if updated:
+                mw.col.update_notes(updated)
 
             if not finished:
-                mw.progress.update(
-                    label=f"✨ Generating... ({processed_count}/{len(note_ids)})",
-                    value=processed_count,
-                    max=len(note_ids),
-                )
+                if progress:
+                    progress.set_value(processed_count)
+                    if not cancellation_state["cancelled"]:
+                        progress.set_label(
+                            f"✨ Generating... ({processed_count}/{len(note_ids)})"
+                        )
             else:
                 logger.info("Finished processing all notes")
-                mw.progress.finish()
+                if progress:
+                    progress.set_value(len(note_ids))
 
         async def op():
+            # ... existing op code ...
             total_updated = []
             total_failed = []
             total_skipped = []
@@ -147,14 +198,34 @@ class NoteProcessor:
             processed_count = 0
 
             while len(to_process_ids) > 0:
+                if cancellation_state["cancelled"]:
+                    break
+
                 logger.debug("Processing batch...")
                 batch = to_process_ids[:limit]
                 to_process_ids = to_process_ids[limit:]
+
+                def on_progress() -> None:
+                    nonlocal processed_count
+                    processed_count += 1
+                    run_on_main(
+                        lambda: on_update(
+                            [],  # Don't update DB yet, just progress
+                            processed_count,
+                            False,
+                        )
+                    )
+
                 updated, failed, skipped = await self._process_notes_batch(
-                    batch, overwrite_fields=overwrite_fields, did_map=did_map
+                    batch,
+                    overwrite_fields=overwrite_fields,
+                    did_map=did_map,
+                    on_progress=on_progress,
+                    cancellation_state=cancellation_state,
                 )
 
-                processed_count += len(batch)
+                # Count is already incremented in on_progress
+                # processed_count += len(batch)
 
                 total_updated.extend(updated)
                 total_failed.extend(failed)
@@ -177,7 +248,7 @@ class NoteProcessor:
             return total_updated, total_failed, total_skipped
 
         run_async_in_background_with_sentry(
-            op, wrapped_on_success, on_failure, with_progress=True
+            op, wrapped_on_success, on_failure, with_progress=False
         )
 
     async def _process_notes_batch(
@@ -185,6 +256,8 @@ class NoteProcessor:
         note_ids: Sequence[NoteId],
         overwrite_fields: bool,
         did_map: dict[NoteId, DeckId],
+        on_progress: Optional[Callable[[], None]] = None,
+        cancellation_state: Optional[dict[str, bool]] = None,
     ) -> tuple[list[Note], list[Note], list[Note]]:
         """Returns updated, failed, skipped notes"""
         logger.debug(f"Processing {len(note_ids)} notes...")
@@ -203,30 +276,68 @@ class NoteProcessor:
             if not prompts:
                 logger.debug("Error: no prompts found for note type")
                 skipped.append(note)
+                if on_progress:
+                    on_progress()
             else:
                 to_process.append(note)
-        if not to_process:
+        if not to_process and not skipped:
             logger.debug("No notes to process")
             return ([], [], [])
 
         # Run them all in parallel
         tasks = []
         for note in to_process:
-            tasks.append(
-                self._process_note(
-                    note, overwrite_fields=overwrite_fields, deck_id=did_map[note.id]
-                )
+
+            async def wrapped(n: Note = note) -> bool | None:
+                if cancellation_state and cancellation_state["cancelled"]:
+                    return None
+                try:
+                    res = await self._process_note(
+                        n, overwrite_fields=overwrite_fields, deck_id=did_map[n.id]
+                    )
+                    if on_progress:
+                        on_progress()
+                    return res
+                except asyncio.CancelledError:
+                    return None
+                except Exception as e:
+                    if on_progress:
+                        on_progress()
+                    raise e
+
+            tasks.append(asyncio.create_task(wrapped()))
+
+        # Wait for tasks to complete, checking for cancellation periodically
+        while True:
+            if cancellation_state and cancellation_state["cancelled"]:
+                logger.debug("Cancelling pending tasks in batch...")
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                # Don't break immediately, we need to gather the results (which will be CancelledErrors/None)
+                # But we can just proceed to gather below
+                break
+
+            done, pending = await asyncio.wait(
+                tasks, timeout=0.1, return_when=asyncio.ALL_COMPLETED
             )
+            if not pending:
+                break
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process errors
         notes_to_update = []
         failed = []
         for i, result in enumerate(results):
+            if result is None:
+                # Cancelled
+                continue
+
             note = to_process[i]
             if isinstance(result, Exception):
                 logger.error(
-                    f"Error processing note {note_ids[i]}: {result}, {''.join(traceback.format_exception(type(result), result, result.__traceback__))}"
+                    f"Error processing note {note.id}: {result}, {''.join(traceback.format_exception(type(result), result, result.__traceback__))}"
                 )
                 failed.append(note)
             elif result:

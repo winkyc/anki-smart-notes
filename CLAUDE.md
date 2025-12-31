@@ -6,7 +6,10 @@
 
 # Code Style and Practices
 - Follow existing practices and conventions in the codebase.
-- Use modern Python. Make sure your code is fully typed.
+- Use modern Python (3.9+). Make sure your code is fully typed.
+- **Async/Sync**: Anki uses Qt (synchronous UI). The plugin uses `asyncio` for network requests. 
+    - Use `src/utils.py:run_on_main` for UI updates from background threads.
+    - Use `src/sentry.py:run_async_in_background_with_sentry` for launching async background tasks.
 - Always run format, lint, typecheck, and tests as the last thing you do. This is super important.
 - Always put imports at the top of files, never inside functions or methods 
 - Don't prefix top level defs with an `_` ever. Save those for private methods on classes.
@@ -44,7 +47,10 @@
 - **`hooks.py`**: Sets up all Anki UI hooks, menu items, buttons, and context menus. Initializes logging, config, and migrations. Contains the main UI integration logic.
 
 ### Core Processing Classes
-- **`NoteProcessor`** (`note_proccessor.py`): Main orchestrator for processing notes/cards. Handles batch processing, single card processing, and manages the DAG execution flow.
+- **`NoteProcessor`** (`note_proccessor.py`): Main orchestrator for processing notes/cards. 
+    - Handles batch processing with granular, cancellable progress bars.
+    - Manages the DAG execution flow for field dependencies.
+    - Handles retry logic and error reporting.
 - **`FieldProcessor`** (`field_processor.py`): Handles individual field processing based on type (chat, TTS, image). Routes to appropriate providers and handles response formatting.
 - **`AppStateManager`** (`app_state.py`): Manages subscription state, capacity limits, and app unlock status. Handles transitions between subscription states.
 
@@ -59,8 +65,9 @@
   - `SmartFieldType` ("chat", "tts", "image")
   - `FieldExtras` configuration per field
   - Provider/model mappings
-- **`config.py`**: Global configuration management with persistence
-- **`constants.py`**: Error messages, limits, and static values
+- **`config.py`**: Global configuration management with persistence.
+- **`constants.py`**: Error messages, limits, and static values (e.g. timeouts).
+- **`env.py`**: Environment detection (PROD vs DEV) for API endpoints.
 
 ### Provider Classes
 - **`chat_provider.py`**: Handles OpenAI, Anthropic, DeepSeek chat completions
@@ -69,17 +76,16 @@
 - **`open_ai_client.py`**: Legacy OpenAI client for users with API keys
 
 ### UI System (`src/ui/`)
-- **Reactive Components**: Base classes for reactive UI widgets that update automatically
-- **`addon_options_dialog.py`**: Main settings dialog
-- **`field_menu.py`**: Context menu for individual fields 
-- **`state_manager.py`**: Generic state management for UI components
-- **Dialog Components**: Various specialized dialogs for prompts, subscriptions, etc.
+- **Reactive Components**: Base classes (`ReactiveWidget`, `ReactiveState`) for UI widgets that update automatically when underlying state changes.
+- **`addon_options_dialog.py`**: Main settings dialog, heavily uses reactive components.
+- **`field_menu.py`**: Context menu additions for individual fields in the editor.
+- **`custom_prompt.py`**: "Prompt Palette" for testing/running prompts on a single note.
 
 ### Utilities
-- **`notes.py`**: Note type utilities, field validation, AI field detection
-- **`decks.py`**: Deck-related utilities and caching
-- **`utils.py`**: General utilities, async helpers, field extraction
-- **`media_utils.py`**: Media file path generation for TTS/images 
+- **`utils.py`**: General utilities, async helpers (`run_on_main`), file loading.
+- **`sentry.py`**: Error reporting and background task wrapping (`run_async_in_background_with_sentry`).
+- **`notes.py`**: Note type utilities, field validation.
+- **`decks.py`**: Deck-related utilities and caching.
 
 # Creating New Files
 - All new files must have the following license information at the very top.
