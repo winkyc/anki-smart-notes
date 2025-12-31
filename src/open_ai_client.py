@@ -26,6 +26,7 @@ from .constants import (
     CHAT_CLIENT_TIMEOUT_SEC,
     DEFAULT_TEMPERATURE,
     MAX_RETRIES,
+    REASONING_CLIENT_TIMEOUT_SEC,
     RETRY_BASE_SECONDS,
 )
 from .logger import logger
@@ -66,6 +67,7 @@ class OpenAIClient:
             "messages": [{"role": "user", "content": prompt}],
         }
 
+        client_timeout = timeout
         if is_reasoning:
             efforts = openai_reasoning_efforts_for_model(model)
             current_effort = (config.legacy_openai_reasoning_effort or "medium").lower()
@@ -73,13 +75,16 @@ class OpenAIClient:
             if current_effort not in efforts:
                 current_effort = "medium" if "medium" in efforts else efforts[0]
 
+            if current_effort in ("high", "xhigh"):
+                client_timeout = aiohttp.ClientTimeout(total=REASONING_CLIENT_TIMEOUT_SEC)
+
             payload["reasoning_effort"] = current_effort
         else:
             payload["temperature"] = temperature
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
+                aiohttp.ClientSession(timeout=client_timeout) as session,
                 session.post(
                     endpoint,
                     headers={
