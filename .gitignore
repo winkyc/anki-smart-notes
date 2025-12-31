@@ -166,5 +166,9 @@ cython_debug/
 # Anki overwriting config
 meta.json
 config_backup.json
+config.json
+
+# Dependencies
+vendor/
 
 todo*.md
